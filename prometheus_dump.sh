@@ -2,12 +2,40 @@
 
 set -eo pipefail
 
-output_dir=$1
 prometheus_namespace=openshift-monitoring
 
-if [[ "$#" -ne 1 ]]; then
-	 echo "syntax: $0 <output_dir>"
-	 exit 1
+function help() {
+	printf "\n"
+	printf "Usage: source env.sh; $0\n"
+        printf "\n"
+        printf "options supported:\n"
+	printf "\t OUTPUT_DIR=str,                       str=dir to store the capture prometheus data\n"
+	printf "\t PROMETHEUS_CAPTURE=str,               str=true or false, enables/disables prometheus capture\n"
+	printf "\t PROMETHEUS_CAPTURE_TYPE=str,          str=wal or full, wal captures the write ahead log and full captures the entire prometheus DB\n"
+}
+
+if [[ -z "$OUTPUT_DIR" ]]; then
+	echo "Looks like OUTPUT_DIR is not defined, please check"
+	help
+	exit 1
+fi
+
+if [[ -z "$PROMETHEUS_CAPTURE" ]]; then
+	echo "Looks like PROMETHEUS_CAPTURE is not defined, please check"
+	help
+	exit 1
+fi
+
+if [[ -z "$PROMETHEUS_CAPTURE_TYPE" ]]; then
+	echo "Looks like PROMETHEUS_CAPTURE_TYPE is not defined, please check"
+	help
+	exit 1
+fi
+
+if [[ -z "$STORAGE_TYPE" ]]; then
+	echo "Looks like STORAGE_TYPE is not defined, please check"
+	help
+	exit 1
 fi
 
 # Check for kubeconfig
@@ -29,11 +57,35 @@ fi
 # pick a prometheus pod
 prometheus_pod=$(oc get pods -n $prometheus_namespace | grep -w "Running" | awk -F " " '/prometheus-k8s/{print $1}' | tail -n1)
 
-# copy the prometheus DB from the prometheus pod
-echo "copying prometheus DB from $prometheus_pod"
-oc cp $prometheus_namespace/$prometheus_pod:/prometheus/wal -c prometheus wal/
-echo "creating a tarball of the captured DB at $output_dir"
-XZ_OPT=--threads=0 tar cJf $output_dir/prometheus.tar.xz wal
-if [[ $? == 0 ]]; then
-	rm -rf wal
+# copy the prometheus write ahead log from the prometheus pod
+function capture_wal() {
+	echo "copying prometheus wal from $prometheus_pod"
+	oc cp $prometheus_namespace/$prometheus_pod:/prometheus/wal -c prometheus $OUTPUT_DIR/wal/
+	echo "creating a tarball of the captured DB at $OUTPUT_DIR"
+	XZ_OPT=--threads=0 tar cJf $OUTPUT_DIR/prometheus.tar.xz wal
+	if [[ $? == 0 ]]; then
+		rm -rf wal
+	fi
+}
+
+# copy the entire DB from the prometheus pod
+function capture_full_db() {
+	echo "copying the prometheus DB from $prometheus_pod"
+	oc cp  $prometheus_namespace/$prometheus_pod:/prometheus/ -c prometheus $OUTPUT_DIR/data/
+	echo "creating a tarball of the captured DB at $OUTPUT_DIR"
+	XZ_OPT=--threads=0 tar cJf $OUTPUT_DIR/prometheus.tar.xz -C data .
+	if [[ $? == 0 ]]; then
+		rm -rf data
+	fi
+}
+
+if [[ "$PROMETHEUS_CAPTURE" == "true" ]]; then
+	if [[ "$PROMETHEUS_CAPTURE_TYPE" == "wal" ]]; then
+		capture_wal
+	elif [[ "$PROMETHEUS_CAPTURE_TYPE" == "full" ]]; then
+		capture_full_db
+	else
+		echo "Looks like $type is not a valid option, please check"
+		help
+	fi
 fi
